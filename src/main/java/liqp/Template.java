@@ -2,12 +2,15 @@ package liqp;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import java.util.HashSet;
+import java.util.Set;
 import liqp.exceptions.LiquidException;
 import liqp.filters.Filter;
 import liqp.nodes.LNode;
 import liqp.parser.Flavor;
 import liqp.parser.LiquidSupport;
 import liqp.parser.v4.NodeVisitor;
+import liqp.tags.Block;
 import liqp.tags.Include;
 import liqp.tags.Tag;
 import liquid.parser.v4.LiquidLexer;
@@ -73,9 +76,14 @@ public class Template {
         this.filters = filters;
         this.parseSettings = parseSettings;
 
+        // split tags and blocks
+        List<Set<String>> tagsAndBlocks = partitionBlocksAndTags(tags);
+        Set<String> blockNames = tagsAndBlocks.get(0);
+        Set<String> tagNames = tagsAndBlocks.get(1);
+
         CharStream stream = CharStreams.fromString(input);
         this.templateSize = stream.size();
-        LiquidLexer lexer = new LiquidLexer(stream, parseSettings.stripSpacesAroundTags, parseSettings.stripSingleLine);
+        LiquidLexer lexer = new LiquidLexer(stream, parseSettings.stripSpacesAroundTags, parseSettings.stripSingleLine, blockNames, tagNames);
         try {
             root = parse(lexer);
         }
@@ -93,10 +101,15 @@ public class Template {
         this.filters = filters;
         this.parseSettings = parseSettings;
 
+        // split tags and blocks
+        List<Set<String>> tagsAndBlocks = partitionBlocksAndTags(tags);
+        Set<String> blockNames = tagsAndBlocks.get(0);
+        Set<String> tagNames = tagsAndBlocks.get(1);
+
         try {
             CharStream stream = CharStreams.fromStream(input);
             this.templateSize = stream.size();
-            LiquidLexer lexer = new LiquidLexer(stream, parseSettings.stripSpacesAroundTags, parseSettings.stripSingleLine);
+            LiquidLexer lexer = new LiquidLexer(stream, parseSettings.stripSpacesAroundTags, parseSettings.stripSingleLine, blockNames, tagNames);
             root = parse(lexer);
         }
         catch (LiquidException e) {
@@ -104,6 +117,26 @@ public class Template {
         }
         catch (Exception e) {
             throw new RuntimeException("could not parse input: " + input, e);
+        }
+    }
+
+    // main private constructor
+    private Template (CharStream stream, Map<String, Tag> tags, Map<String, Filter> filters, ParseSettings parseSettings) {
+        this.tags = tags;
+        this.filters = filters;
+        this.parseSettings = parseSettings;
+
+        // split tags and blocks
+        List<Set<String>> tagsAndBlocks = partitionBlocksAndTags(tags);
+        Set<String> blockNames = tagsAndBlocks.get(0);
+        Set<String> tagNames = tagsAndBlocks.get(1);
+
+        try {
+            this.templateSize = stream.size();
+            LiquidLexer lexer = new LiquidLexer(stream, parseSettings.stripSpacesAroundTags, parseSettings.stripSingleLine, blockNames, tagNames);
+            root = parse(lexer);
+        } catch (LiquidException e) {
+            throw e;
         }
     }
 
@@ -134,20 +167,42 @@ public class Template {
      *         the file holding the Liquid source.
      */
     private Template(File file, Map<String, Tag> tags, Map<String, Filter> filters, ParseSettings parseSettings) throws IOException {
-
         this.tags = tags;
         this.filters = filters;
         this.parseSettings = parseSettings;
         CharStream stream = CharStreams.fromFileName(file.getAbsolutePath());
 
+        // split tags and blocks
+        List<Set<String>> tagsAndBlocks = partitionBlocksAndTags(tags);
+        Set<String> blockNames = tagsAndBlocks.get(0);
+        Set<String> tagNames = tagsAndBlocks.get(1);
+
         try {
             this.templateSize = stream.size();
-            LiquidLexer lexer = new LiquidLexer(stream, parseSettings.stripSpacesAroundTags, parseSettings.stripSingleLine);
+            LiquidLexer lexer = new LiquidLexer(stream, parseSettings.stripSpacesAroundTags, parseSettings.stripSingleLine, blockNames, tagNames);
             root = parse(lexer);
         }
         catch (Exception e) {
             throw new RuntimeException("could not parse input from " + file, e);
         }
+    }
+
+    private static List<Set<String>> partitionBlocksAndTags(Map<String, Tag> tags) {
+        Set<String> blockNames = new HashSet<>();
+        Set<String> tagNames = new HashSet<>();
+
+        for (String name : tags.keySet()) {
+            Tag t = tags.get(name);
+            if (t instanceof Block) {
+                blockNames.add(name);
+            } else {
+                tagNames.add(name);
+            }
+        }
+        ArrayList<Set<String>> returnList = new ArrayList<>();
+        returnList.add(blockNames);
+        returnList.add(tagNames);
+        return returnList;
     }
 
     /**
@@ -226,6 +281,24 @@ public class Template {
         return new Template(input, Tag.getTags(), Filter.getFilters(ParseSettings.DEFAULT_FLAVOR), new ParseSettings.Builder().build());
     }
 
+  /**
+   * Returns a new Template instance from a given input string with a specified set of
+   * tags and filters
+   *
+   * @param input
+   *         the input string holding the Liquid source.
+   * @param tags
+   *         the list of tags to use when parsing and rendering the template
+   * @param filters
+   *         the list of filters to use when parsing and rendering the template
+   *
+   * @return a new Template instance from a given input string.
+   */
+    public static Template parse(String input, List<Tag> tags, List<Filter> filters) {
+
+        return parse(input, tags, filters, new ParseSettings.Builder().build(), new RenderSettings.Builder().build());
+    }
+
     /**
      * Returns a new Template instance from a given input file.
      *
@@ -270,14 +343,18 @@ public class Template {
         return parse(input, settings);
     }
 
-    public Template with(Tag tag) {
-        this.tags.put(tag.name, tag);
-        return this;
-    }
+    public static Template parse(String input, List<Tag> tags, List<Filter> filters, ParseSettings parseSettings, RenderSettings renderSettings) {
+      Map<String, Tag> tagMap = new HashMap<>();
+      for (Tag tag : tags) {
+        tagMap.put(tag.name, tag);
+      }
 
-    public Template with(Filter filter) {
-        this.filters.put(filter.name, filter);
-        return this;
+      Map<String, Filter> filterMap = new HashMap<>();
+      for (Filter filter: filters) {
+        filterMap.put(filter.name, filter);
+      }
+
+      return new Template(input, tagMap, filterMap, parseSettings, renderSettings);
     }
 
     public Template withProtectionSettings(ProtectionSettings protectionSettings) {

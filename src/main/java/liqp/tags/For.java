@@ -12,7 +12,7 @@ import liqp.nodes.LNode;
 import java.util.HashMap;
 import java.util.Map;
 
-class For extends Tag {
+class For extends Block {
 
     private static final String OFFSET = "offset";
     private static final String LIMIT = "limit";
