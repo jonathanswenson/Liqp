@@ -6,7 +6,7 @@ import liqp.nodes.LNode;
 import java.util.ArrayList;
 import java.util.List;
 
-class Cycle extends Tag {
+class Cycle extends Block {
 
     private static final String PREPEND = "\"'";
 

@@ -1,5 +1,7 @@
 package liqp.parser.v4;
 
+import java.util.HashSet;
+import java.util.Set;
 import liquid.parser.v4.LiquidParser;
 import org.antlr.v4.runtime.BaseErrorListener;
 import org.antlr.v4.runtime.RecognitionException;
@@ -14,6 +16,21 @@ import static org.hamcrest.core.IsEqual.equalTo;
 import static org.junit.Assert.assertThat;
 
 public class LiquidParserTest {
+
+    // simple error listener that captures the last error message.
+    class CapturingErrorListener extends BaseErrorListener {
+        private String lastErrorMessage = null;
+
+        @Override
+        public void syntaxError(Recognizer<?, ?> recognizer, Object offendingSymbol, int line,
+        int charPositionInLine, String msg, RecognitionException e) {
+            lastErrorMessage = msg;
+        }
+
+        public String getLastErrorMessage() {
+            return lastErrorMessage;
+        }
+    }
 
     // custom_tag
     //  : tagStart Id custom_tag_parameters? TagEnd custom_tag_block?
@@ -33,19 +50,84 @@ public class LiquidParserTest {
     @Test
     public void testCustom_tag() {
 
+        Set<String> emptySet = new HashSet<>();
+        Set<String> muSet = new HashSet<>();
+        muSet.add("mu");
+        muSet.add("other");
+
         assertThat(
-                texts("{% mu %}", "other_tag"),
+                texts("{% mu %}", "simple_tag", emptySet, muSet),
                 equalTo(array("{%", "mu", "%}"))
         );
 
         assertThat(
-                texts("{% mu | 42 %}", "other_tag"),
+                texts("{% mu | 42 %}", "simple_tag", emptySet, muSet),
                 equalTo(array("{%", "mu", "|42", "%}"))
         );
 
         assertThat(
-                texts("{% mu %} . {% endmu %}", "other_tag"),
-                equalTo(array("{%", "mu", "%}", " . {%endmu%}"))
+                texts("{% mu %} . {% endmu %}", "other_tag", muSet, emptySet),
+                equalTo(array("{%", "mu", "%}", " . ", "{%", "endmu", "%}"))
+        );
+
+        assertThat(
+            texts("{% mu as_df %} . {% endmu %}", "other_tag", muSet, emptySet),
+            equalTo(array("{%", "mu", "as_df", "%}", " . ", "{%", "endmu", "%}"))
+        );
+
+        CapturingErrorListener el = new CapturingErrorListener();
+        assertThat(
+            textsWithError("{% mu | 42%} . {% endbad %}", "error_other_tag", muSet, emptySet, el),
+            equalTo(array("{%", "mu", "|42","%}", " . ", "{%", "endbad", "%}"))
+        );
+
+        assertThat(el.getLastErrorMessage(), equalTo("Invalid End Tag: 'endbad'"));
+
+        assertThat(
+            textsWithError("{% mu %} . {% endother %}", "error_other_tag", muSet, emptySet, el),
+            equalTo(array("{%", "mu", "%}", " . ", "{%", "endother", "%}"))
+        );
+        assertThat(el.getLastErrorMessage(), equalTo("Mismatched End Tag: 'endother'"));
+
+        assertThat(
+            textsWithError("{% bad %} . {% endbad %}", "error_other_tag", muSet, emptySet, el),
+            equalTo(array("{%", "bad", "%}"))
+        );
+        assertThat(el.getLastErrorMessage(), equalTo("Invalid Tag: 'bad'"));
+
+        assertThat(
+            textsWithError("{% bad parameter %} . {% endbad %}", "error_other_tag", muSet, emptySet, el),
+            equalTo(array("{%", "bad", "parameter", "%}"))
+        );
+        assertThat(el.getLastErrorMessage(), equalTo("Invalid Tag: 'bad'"));
+
+        assertThat(
+            textsWithError("{% bad parameter[index] %} . {% endbad %}", "error_other_tag", muSet, emptySet, el),
+            equalTo(array("{%", "bad", "parameter[index]", "%}"))
+        );
+        assertThat(el.getLastErrorMessage(), equalTo("Invalid Tag: 'bad'"));
+
+        assertThat(
+            textsWithError("{% bad parameter.index %} . {% endbad %}", "error_other_tag", muSet, emptySet, el),
+            equalTo(array("{%", "bad", "parameter.index", "%}"))
+        );
+        assertThat(el.getLastErrorMessage(), equalTo("Invalid Tag: 'bad'"));
+
+        assertThat(
+            textsWithError("{% bad parameter.index.index2 %} . {% endbad %}", "error_other_tag", muSet, emptySet, el),
+            equalTo(array("{%", "bad", "parameter.index.index2", "%}"))
+        );
+        assertThat(el.getLastErrorMessage(), equalTo("Invalid Tag: 'bad'"));
+
+        assertThat(
+            textsWithError("{% mu %} {% mu %} {% endmu %}", "error_other_tag", muSet, emptySet, el),
+            equalTo(array("{%", "mu", "%}", " ", "{%mu%} {%endmu%}"))
+        );
+        assertThat(el.getLastErrorMessage(), equalTo("Missing End Tag"));
+
+        assertThat(
+            textsWithError("{% %}", "error_other_tag", muSet, emptySet, el),
+            equalTo(array("{%", "%}"))
         );
     }
 
@@ -334,6 +416,19 @@ public class LiquidParserTest {
         );
     }
 
+    private static String[] texts(String source, String ruleName, Set<String> customBlocks, Set<String> customTags) {
+
+        ParseTree tree = parse(source, ruleName, customBlocks, customTags);
+
+        return texts(tree);
+    }
+
+    private static String[] textsWithError(String source, String ruleName, Set<String> customBlocks, Set<String> customTags, BaseErrorListener el) {
+        ParseTree tree = parseWithListener(source, ruleName, customBlocks, customTags, el);
+
+        return texts(tree);
+    }
+
     private static String[] texts(String source, String ruleName) {
 
         ParseTree tree = parse(source, ruleName);
@@ -353,15 +448,14 @@ public class LiquidParserTest {
     }
 
     private static ParseTree parse(String source, String ruleName) {
+        return parse(source, ruleName, new HashSet<String>(), new HashSet<String>());
+    }
 
-        LiquidParser parser = new LiquidParser(LiquidLexerTest.commonTokenStream(source, false));
+    private static ParseTree parseWithListener(String source, String ruleName, Set<String> customBlocks, Set<String> customTags, BaseErrorListener el) {
+        LiquidParser parser = new LiquidParser(LiquidLexerTest.commonTokenStream(source, false, customBlocks, customTags));
 
-        parser.addErrorListener(new BaseErrorListener(){
-            @Override
-            public void syntaxError(Recognizer<?, ?> recognizer, Object offendingSymbol, int line, int charPositionInLine, String msg, RecognitionException e) {
-                throw new RuntimeException(e);
-            }
-        });
+        parser.removeErrorListeners();
+        parser.addErrorListener(el);
 
         try {
             Method method = parser.getClass().getMethod(ruleName);
@@ -370,6 +464,16 @@ public class LiquidParserTest {
         catch (Exception e) {
             throw new RuntimeException("could not parse source '" + source + "' using rule: " + ruleName);
         }
+    }
+
+    private static ParseTree parse(String source, String ruleName, Set<String> customBlocks, Set<String> customTags) {
+        BaseErrorListener el = new BaseErrorListener(){
+            @Override
+            public void syntaxError(Recognizer<?, ?> recognizer, Object offendingSymbol, int line, int charPositionInLine, String msg, RecognitionException e) {
+                throw new RuntimeException(e);
+            }
+        };
+        return parseWithListener(source, ruleName, customBlocks, customTags, el);
     }
 
     private static String[] array(String... values) {

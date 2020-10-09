@@ -5,7 +5,7 @@ import liqp.nodes.LNode;
 
 import java.util.*;
 
-public class Ifchanged extends Tag {
+public class Ifchanged extends Block {
 
     private static final String TEMP_SET_KEY = "@ifchanged";
 
